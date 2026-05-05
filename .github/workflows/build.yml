@@ -1,0 +1,28 @@
+name: Build and Upload MSI
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up JDK
+        uses: actions/setup-java@v3
+        with:
+          java-version: "17"
+
+      - name: Build project
+        run: mvnw.cmd package
+
+      - name: Upload MSI
+        uses: actions/upload-artifact@v3
+        with:
+          name: MSI-file
+          path: target/installer/*.msi
