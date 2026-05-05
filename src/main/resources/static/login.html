@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<title>Вход — Работни часове</title>
+	<link rel="stylesheet" href="/css/app.css" />
+</head>
+<body>
+	<header class="topnav">
+		<h1>Работни часове</h1>
+		<nav>
+			<a href="/">Начало</a>
+		</nav>
+	</header>
+	<div class="wrap">
+		<div class="card" id="loginSection">
+			<h2>Вход</h2>
+			<p class="hint">
+				Въведи телефон (както е зададен от администратора) и парола. Ползвай <strong>един и същи адрес</strong> в
+				лентата на браузъра (напр. само <code>localhost</code> или само <code>127.0.0.1</code>) — иначе сесията няма
+				достъп до токена и API връща грешка.
+			</p>
+			<label for="loginPhone">Телефон</label>
+			<input type="text" id="loginPhone" inputmode="tel" autocomplete="username" placeholder="0888123456" />
+			<label for="loginPassword">Парола</label>
+			<input type="password" id="loginPassword" autocomplete="current-password" />
+			<div class="row" style="margin-top: 1rem">
+				<button type="button" class="btn btn-primary" id="btnLogin">Вход</button>
+			</div>
+			<div id="loginMsg" class="msg" role="status"></div>
+		</div>
+	</div>
+	<script src="/js/api-client.js"></script>
+	<script>
+		function showLoginMsg(text, ok) {
+			const m = document.getElementById("loginMsg");
+			m.textContent = text;
+			m.className = "msg show " + (ok ? "ok" : "err");
+		}
+
+		document.getElementById("btnLogin").addEventListener("click", async () => {
+			const phone = document.getElementById("loginPhone").value.trim();
+			const password = document.getElementById("loginPassword").value;
+			if (!phone || !password) {
+				showLoginMsg("Попълни телефон и парола.", false);
+				return;
+			}
+			const r = await apiRequest("POST", "/api/auth/login", { phoneNumber: phone, password });
+			if (!r.ok) {
+				showLoginMsg(
+					(r.data && r.data.message) || r.status + " " + JSON.stringify(r.data),
+					false
+				);
+				return;
+			}
+			sessionStorage.setItem(HOURS_JWT, r.data.token);
+			sessionStorage.setItem("hours_role", r.data.role);
+			sessionStorage.setItem("hours_name", r.data.name);
+			sessionStorage.setItem("hours_phone", r.data.phoneNumber);
+			document.getElementById("loginPassword").value = "";
+			const ret = new URLSearchParams(location.search).get("return");
+			const safe =
+				ret && ret.startsWith("/") && !ret.startsWith("//")
+					? decodeURIComponent(ret)
+					: "/record-day.html";
+			location.href = safe;
+		});
+
+		(function () {
+			if (sessionStorage.getItem(HOURS_JWT)) {
+				const ret = new URLSearchParams(location.search).get("return");
+				location.href =
+					ret && ret.startsWith("/") && !ret.startsWith("//")
+						? decodeURIComponent(ret)
+						: "/record-day.html";
+			}
+		})();
+	</script>
+</body>
+</html>

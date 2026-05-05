@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<title>Работен ден — Работни часове</title>
+	<link rel="stylesheet" href="/css/app.css" />
+</head>
+<body>
+	<header class="topnav topnav-app">
+		<h1>Работни часове</h1>
+		<nav class="app-nav">
+			<a href="/record-day.html" data-nav="record">Работен ден</a>
+			<a href="/entries.html" data-nav="entries">Записи</a>
+			<a href="/hours-summary.html" data-nav="hours">Смятане на часове</a>
+			<a href="/admin-workers.html" data-nav="admin" id="navAdminLink" style="display: none">Работници</a>
+			<span class="nav-user">
+				<strong id="whoami"></strong>
+				<span id="whoPhone" class="mono"></span>
+				<button type="button" class="btn btn-danger" id="btnLogout">Изход</button>
+			</span>
+		</nav>
+	</header>
+	<div class="wrap">
+		<div class="card" id="mainFormCard">
+			<h2>Записване на работен ден</h2>
+			<p id="editModeBanner" class="hint" style="display: none; color: #c4b5fd">
+				Режим: <strong>редакция</strong> — промени полетата и натисни „Запази промените“.
+			</p>
+			<p class="hint">
+				Работник: записваш <strong>своите</strong> часове. Админ: нов запис от тук не се създава — редактирай от
+				<a href="/entries.html">Записи</a>.
+			</p>
+			<p id="adminFormHint" class="hint" style="display: none">
+				Като администратор не създаваш нови смени от тук — използвай <strong>Редактирай</strong> в списъка с записи.
+			</p>
+			<p><strong>Име:</strong> <span id="displayName"></span></p>
+			<label for="transport">Вид превоз</label>
+			<select id="transport">
+				<option value="PERSONAL">Личен</option>
+				<option value="COMPANY">Служебен</option>
+			</select>
+			<label for="workStart">Час на започване</label>
+			<input type="datetime-local" id="workStart" required />
+			<label for="workEnd">Час на приключване</label>
+			<input type="datetime-local" id="workEnd" required />
+			<div class="row" style="margin-top: 1rem">
+				<button type="button" class="btn btn-success" id="btnSave">Записи работния ден</button>
+			</div>
+			<div id="msg" class="msg" role="status"></div>
+			<p id="saveHint" class="hint" style="margin-top: 0.5rem"></p>
+		</div>
+	</div>
+	<script src="/js/api-client.js"></script>
+	<script src="/js/app-common.js"></script>
+	<script>
+		let editingId = null;
+
+		function showMsg(text, ok) {
+			const m = document.getElementById("msg");
+			m.textContent = text;
+			m.className = "msg show " + (ok ? "ok" : "err");
+		}
+
+		function applyDefaults() {
+			const start = hoursTodayAt(8, 0);
+			const end = hoursTodayAt(17, 0);
+			document.getElementById("workStart").value = hoursToDatetimeLocalValue(start);
+			document.getElementById("workEnd").value = hoursToDatetimeLocalValue(end);
+		}
+
+		function updateSaveButtonVisibility() {
+			const btn = document.getElementById("btnSave");
+			const hint = document.getElementById("adminFormHint");
+			if (hoursIsAdmin() && editingId == null) {
+				btn.style.display = "none";
+				hint.style.display = "block";
+			} else {
+				btn.style.display = "inline-flex";
+				hint.style.display = "none";
+			}
+		}
+
+		function setEditMode(on, loadedId) {
+			editingId = on ? loadedId : null;
+			document.getElementById("editModeBanner").style.display = on ? "block" : "none";
+			document.getElementById("btnSave").textContent = on ? "Запази промените" : "Записи работния ден";
+			const nm = document.getElementById("displayName").textContent.trim();
+			document.getElementById("saveHint").textContent = on ? "Редактира се запис за " + (nm || "…") + "." : "";
+			updateSaveButtonVisibility();
+		}
+
+		async function loadEntryForEdit(idStr) {
+			if (!idStr) {
+				return false;
+			}
+			try {
+				const r = await apiRequest("GET", "/api/work-entries/" + encodeURIComponent(idStr));
+				if (!r.ok) {
+					showMsg(r.status + " " + JSON.stringify(r.data), false);
+					return false;
+				}
+				const e = r.data;
+				document.getElementById("displayName").textContent = e.employeeName || "";
+				document.getElementById("transport").value = e.transportType === "COMPANY" ? "COMPANY" : "PERSONAL";
+				document.getElementById("workStart").value = hoursToDatetimeLocalFromApi(e.workStart);
+				document.getElementById("workEnd").value = e.workEnd ? hoursToDatetimeLocalFromApi(e.workEnd) : "";
+				setEditMode(true, Number(idStr));
+				showMsg(
+					e.workEnd
+						? "Зареден запис. Промени и натисни „Запази промените“."
+						: "Зареден запис — няма край. Попълни „Час на приключване“ и запази.",
+					true
+				);
+				return true;
+			} catch (err) {
+				showMsg("Грешка: " + err.message, false);
+				return false;
+			}
+		}
+
+		document.getElementById("btnSave").addEventListener("click", async () => {
+			const displayName = document.getElementById("displayName").textContent.trim();
+			if (!displayName) {
+				showMsg("Липсва име на записа. Зареди запис от списъка или влез отново.", false);
+				return;
+			}
+			const startIso = fromDatetimeLocal(document.getElementById("workStart").value);
+			const endIso = fromDatetimeLocal(document.getElementById("workEnd").value);
+			if (!startIso || !endIso) {
+				showMsg("Попълни и двата часа.", false);
+				return;
+			}
+			if (new Date(endIso.replace(" ", "T")) <= new Date(startIso.replace(" ", "T"))) {
+				showMsg("Приключването трябва да е след започването.", false);
+				return;
+			}
+			const body = {
+				workStart: startIso,
+				workEnd: endIso,
+				transportType: document.getElementById("transport").value,
+			};
+			try {
+				const path = editingId
+					? "/api/work-entries/" + encodeURIComponent(editingId)
+					: "/api/work-entries";
+				const method = editingId ? "PUT" : "POST";
+				const r = await apiRequest(method, path, body);
+				if (!r.ok) {
+					showMsg(r.status + " " + JSON.stringify(r.data), false);
+					return;
+				}
+				const who = displayName;
+				if (editingId) {
+					showMsg("Промените за " + who + " са запазени.", true);
+				} else {
+					showMsg("Записът за " + who + " е приет.", true);
+				}
+				setEditMode(false, null);
+				applyDefaults();
+				document.getElementById("displayName").textContent = sessionStorage.getItem("hours_name") || "";
+				location.href = "/entries.html";
+			} catch (e) {
+				showMsg("Грешка: " + e.message, false);
+			}
+		});
+
+		(async function init() {
+			if (!hoursRequireAuth()) {
+				return;
+			}
+			hoursInitAppHeader("record");
+			const params = new URLSearchParams(location.search);
+			const editId = params.get("edit");
+			if (editId && /^\d+$/.test(editId.trim())) {
+				await loadEntryForEdit(editId.trim());
+			} else {
+				document.getElementById("displayName").textContent = sessionStorage.getItem("hours_name") || "";
+				applyDefaults();
+				setEditMode(false, null);
+			}
+			updateSaveButtonVisibility();
+		})();
+	</script>
+</body>
+</html>

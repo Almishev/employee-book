@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<title>Смятане на часове — Работни часове</title>
+	<link rel="stylesheet" href="/css/app.css" />
+</head>
+<body>
+	<header class="topnav topnav-app">
+		<h1>Работни часове</h1>
+		<nav class="app-nav">
+			<a href="/record-day.html" data-nav="record">Работен ден</a>
+			<a href="/entries.html" data-nav="entries">Записи</a>
+			<a href="/hours-summary.html" data-nav="hours">Смятане на часове</a>
+			<a href="/admin-workers.html" data-nav="admin" id="navAdminLink" style="display: none">Работници</a>
+			<span class="nav-user">
+				<strong id="whoami"></strong>
+				<span id="whoPhone" class="mono"></span>
+				<button type="button" class="btn btn-danger" id="btnLogout">Изход</button>
+			</span>
+		</nav>
+	</header>
+	<div class="wrap">
+		<div class="card" id="hoursSummaryCard">
+			<h2>Смятане на изработени часове</h2>
+			<p class="hint" id="hoursHintWorker">
+				Избери период (включително крайната дата). Броят се само записи с <strong>попълнен край</strong>, по дата на
+				<strong>начало</strong> на смяната.
+			</p>
+			<p class="hint" id="hoursHintAdmin" style="display: none">
+				Избери <strong>работник</strong> или <strong>всички работници</strong> и период. Същите правила за записи с край и
+				начална дата.
+			</p>
+			<label for="hoursFrom">От дата</label>
+			<input type="date" id="hoursFrom" />
+			<label for="hoursTo">До дата</label>
+			<input type="date" id="hoursTo" />
+			<div id="hoursAdminPick" style="display: none">
+				<label for="hoursWorkerSelect">Работник</label>
+				<select id="hoursWorkerSelect"></select>
+			</div>
+			<div class="row" style="margin-top: 0.75rem">
+				<button type="button" class="btn btn-primary" id="btnCalcHours">Пресметни</button>
+				<button type="button" class="btn btn-success" id="btnExportCsv">Експорт за Excel (CSV)</button>
+			</div>
+			<p class="hint" style="margin-top: 0.5rem">
+				Експортът е UTF-8 CSV с разделител „;“ (подходящ за Excel). Колони: дата на смяната, час начало, час край,
+				превоз, име. Включва всички записи с <strong>начало</strong> в избрания период (и без попълнен край).
+			</p>
+			<div id="hoursResultMsg" class="msg" role="status"></div>
+			<div id="hoursResultTableWrap" class="hours-table-wrap" style="display: none" aria-live="polite">
+				<p id="hoursResultPeriodCaption" class="hours-period-caption"></p>
+				<table class="hours-summary-table">
+					<thead>
+						<tr>
+							<th scope="col">Дата</th>
+							<th scope="col">Име</th>
+							<th scope="col">За деня</th>
+							<th scope="col">Общо за работника</th>
+						</tr>
+					</thead>
+					<tbody id="hoursResultTbody"></tbody>
+					<tfoot id="hoursResultTfoot"></tfoot>
+				</table>
+			</div>
+		</div>
+	</div>
+	<script src="/js/api-client.js"></script>
+	<script src="/js/app-common.js"></script>
+	<script>
+		function showHoursResult(text, ok) {
+			const m = document.getElementById("hoursResultMsg");
+			m.textContent = text;
+			m.className = "msg show " + (ok ? "ok" : "err");
+		}
+
+		function hideHoursTable() {
+			const wrap = document.getElementById("hoursResultTableWrap");
+			const tbody = document.getElementById("hoursResultTbody");
+			const tfoot = document.getElementById("hoursResultTfoot");
+			const cap = document.getElementById("hoursResultPeriodCaption");
+			wrap.style.display = "none";
+			tbody.innerHTML = "";
+			tfoot.innerHTML = "";
+			cap.textContent = "";
+		}
+
+		function escapeHoursHtml(s) {
+			if (s == null) {
+				return "";
+			}
+			return String(s)
+				.replace(/&/g, "&amp;")
+				.replace(/</g, "&lt;")
+				.replace(/>/g, "&gt;")
+				.replace(/"/g, "&quot;");
+		}
+
+		function renderWorkedHoursTable(d) {
+			const tbody = document.getElementById("hoursResultTbody");
+			const tfoot = document.getElementById("hoursResultTfoot");
+			const wrap = document.getElementById("hoursResultTableWrap");
+			const cap = document.getElementById("hoursResultPeriodCaption");
+			const msg = document.getElementById("hoursResultMsg");
+			tbody.innerHTML = "";
+			tfoot.innerHTML = "";
+			msg.textContent = "";
+			msg.className = "msg";
+
+			const rows = Array.isArray(d.rows) ? d.rows : [];
+			const pf = d.periodFrom || "";
+			const pt = d.periodTo || "";
+			cap.textContent = pf && pt ? "Период: " + pf + " — " + pt + " · само записи с попълнен край, по дата на начало на смяната." : "";
+
+			if (rows.length === 0) {
+				wrap.style.display = "none";
+				showHoursResult("Няма данни за избрания период.", true);
+				return;
+			}
+
+			const sortedWorkers = rows.slice().sort(function (a, b) {
+				return (a.workerName || "").localeCompare(b.workerName || "", "bg");
+			});
+			let workerIndex = 0;
+			for (const rw of sortedWorkers) {
+				const wname = rw.workerName || "?";
+				const totalStr =
+					formatWorkedMinutes(Number(rw.totalMinutes) || 0) + " (" + (rw.totalHours ?? 0) + " h)";
+				const ce = Number(rw.completeEntries) || 0;
+				const days = Array.isArray(rw.byDay) ? rw.byDay.slice() : [];
+				days.sort(function (a, b) {
+					return String(a.date || "").localeCompare(String(b.date || ""));
+				});
+
+				if (days.length === 0) {
+					const tr = document.createElement("tr");
+					if (workerIndex > 0) {
+						tr.classList.add("hours-row-worker-gap");
+					}
+					tr.classList.add("hours-row-worker-subtotal");
+					tr.innerHTML =
+						"<td>—</td><td><strong>" +
+						escapeHoursHtml("Общо за " + wname) +
+						"</strong></td><td>" +
+						escapeHoursHtml(String(ce) + " записа с край") +
+						"</td><td><strong>" +
+						escapeHoursHtml(totalStr) +
+						"</strong></td>";
+					tbody.appendChild(tr);
+				} else {
+					let dayIdx = 0;
+					for (const day of days) {
+						const tr = document.createElement("tr");
+						if (workerIndex > 0 && dayIdx === 0) {
+							tr.classList.add("hours-row-worker-gap");
+						}
+						const dm = Number(day.totalMinutes) || 0;
+						const dayStr = formatWorkedMinutes(dm) + " (" + (day.totalHours ?? 0) + " h)";
+						const dce = Number(day.completeEntries) || 0;
+						tr.innerHTML =
+							"<td>" +
+							escapeHoursHtml(day.date) +
+							"</td><td>" +
+							escapeHoursHtml(wname) +
+							"</td><td>" +
+							escapeHoursHtml(dayStr) +
+							(dce > 1
+								? " <span class=\"hours-day-meta\">(" + escapeHoursHtml(String(dce)) + " записа)</span>"
+								: "") +
+							"</td><td class=\"hours-col-total-empty\">—</td>";
+						tbody.appendChild(tr);
+						dayIdx++;
+					}
+					const trSub = document.createElement("tr");
+					trSub.classList.add("hours-row-worker-subtotal");
+					trSub.innerHTML =
+						"<td>—</td><td><strong>" +
+						escapeHoursHtml("Общо за " + wname) +
+						"</strong></td><td>" +
+						escapeHoursHtml(String(ce) + " записа с край") +
+						"</td><td><strong>" +
+						escapeHoursHtml(totalStr) +
+						"</strong></td>";
+					tbody.appendChild(trSub);
+				}
+				workerIndex++;
+			}
+
+			if (d.allWorkers && rows.length > 0) {
+				const gtm = Number(d.grandTotalMinutes) || 0;
+				const gstr =
+					formatWorkedMinutes(gtm) +
+					" (" +
+					(d.grandTotalHours ?? 0) +
+					" h) · записи с край: " +
+					(d.grandCompleteEntries ?? 0);
+				const tr = document.createElement("tr");
+				tr.className = "hours-row-grand";
+				tr.innerHTML =
+					'<td colspan="2"><strong>Общо (всички работници)</strong></td><td colspan="2"><strong>' +
+					escapeHoursHtml(gstr) +
+					"</strong></td>";
+				tfoot.appendChild(tr);
+			}
+
+			wrap.style.display = "block";
+		}
+
+		function setupHoursSummaryUi() {
+			const now = new Date();
+			const y = now.getFullYear();
+			const m = hoursPad(now.getMonth() + 1);
+			const day = hoursPad(now.getDate());
+			document.getElementById("hoursFrom").value = y + "-" + m + "-01";
+			document.getElementById("hoursTo").value = y + "-" + m + "-" + day;
+			const adminPick = document.getElementById("hoursAdminPick");
+			const hw = document.getElementById("hoursHintWorker");
+			const ha = document.getElementById("hoursHintAdmin");
+			if (hoursIsAdmin()) {
+				adminPick.style.display = "block";
+				hw.style.display = "none";
+				ha.style.display = "block";
+			} else {
+				adminPick.style.display = "none";
+				hw.style.display = "block";
+				ha.style.display = "none";
+			}
+			const mres = document.getElementById("hoursResultMsg");
+			mres.textContent = "";
+			mres.className = "msg";
+			hideHoursTable();
+		}
+
+		function formatWorkedMinutes(tm) {
+			const n = Number(tm) || 0;
+			const h = Math.floor(n / 60);
+			const min = n % 60;
+			return h + " ч " + min + " мин";
+		}
+
+		function populateHoursWorkerSelect(list) {
+			const sel = document.getElementById("hoursWorkerSelect");
+			sel.innerHTML = "";
+			const optAll = document.createElement("option");
+			optAll.value = "all";
+			optAll.textContent = "Всички работници";
+			sel.appendChild(optAll);
+			const opt0 = document.createElement("option");
+			opt0.value = "";
+			opt0.textContent = "— един работник —";
+			sel.appendChild(opt0);
+			for (const w of list) {
+				const o = document.createElement("option");
+				o.value = String(w.id);
+				o.textContent = (w.name || "?") + " · " + (w.phoneNumber || "");
+				sel.appendChild(o);
+			}
+		}
+
+		async function loadWorkersForHoursSelect() {
+			if (!hoursIsAdmin()) {
+				return;
+			}
+			const r = await apiRequest("GET", "/api/admin/workers");
+			if (!r.ok) {
+				hideHoursTable();
+				showHoursResult(r.status + " " + JSON.stringify(r.data), false);
+				return;
+			}
+			const list = Array.isArray(r.data) ? r.data : [];
+			populateHoursWorkerSelect(list);
+		}
+
+		async function downloadPeriodCsv() {
+			const from = document.getElementById("hoursFrom").value;
+			const to = document.getElementById("hoursTo").value;
+			if (!from || !to) {
+				hideHoursTable();
+				showHoursResult("Попълни двете дати преди експорт.", false);
+				return;
+			}
+			let path = "/api/work-entries/export?from=" + encodeURIComponent(from) + "&to=" + encodeURIComponent(to);
+			if (hoursIsAdmin()) {
+				const wid = document.getElementById("hoursWorkerSelect").value;
+				if (wid === "") {
+					hideHoursTable();
+					showHoursResult("Избери един работник или „Всички работници“ за експорт.", false);
+					return;
+				}
+				if (wid !== "all") {
+					path += "&workerId=" + encodeURIComponent(wid);
+				}
+			}
+			try {
+				const res = await fetch(apiBase() + path, {
+					method: "GET",
+					headers: { Accept: "text/csv;charset=UTF-8", ...authHeaders() },
+				});
+				if (!res.ok) {
+					hideHoursTable();
+					const text = await res.text();
+					let msg = res.status + " " + text;
+					try {
+						const j = JSON.parse(text);
+						msg = (j.message || j.detail || j.title || j.error) || msg;
+					} catch (_) {
+						/* не е JSON */
+					}
+					showHoursResult(String(msg), false);
+					return;
+				}
+				const blob = await res.blob();
+				const url = URL.createObjectURL(blob);
+				const fname = "zapisi_" + from + "_" + to + ".csv";
+				const a = document.createElement("a");
+				a.href = url;
+				a.download = fname;
+				document.body.appendChild(a);
+				a.click();
+				a.remove();
+				URL.revokeObjectURL(url);
+				showHoursResult("Изтеглен файл: " + fname + " — в Excel: Данни → От текст/CSV, разделител „;“, UTF-8.", true);
+			} catch (e) {
+				hideHoursTable();
+				showHoursResult("Грешка: " + e.message, false);
+			}
+		}
+
+		document.getElementById("btnExportCsv").addEventListener("click", downloadPeriodCsv);
+
+		document.getElementById("btnCalcHours").addEventListener("click", async () => {
+			hideHoursTable();
+			const from = document.getElementById("hoursFrom").value;
+			const to = document.getElementById("hoursTo").value;
+			if (!from || !to) {
+				showHoursResult("Попълни двете дати.", false);
+				return;
+			}
+			let path =
+				"/api/work-entries/worked-hours-summary?from=" +
+				encodeURIComponent(from) +
+				"&to=" +
+				encodeURIComponent(to);
+			if (hoursIsAdmin()) {
+				const wid = document.getElementById("hoursWorkerSelect").value;
+				if (wid === "") {
+					hideHoursTable();
+					showHoursResult("Избери един работник или „Всички работници“.", false);
+					return;
+				}
+				if (wid !== "all") {
+					path += "&workerId=" + encodeURIComponent(wid);
+				}
+			}
+			try {
+				const r = await apiRequest("GET", path);
+				if (!r.ok) {
+					hideHoursTable();
+					const msg =
+						(r.data && (r.data.message || r.data.detail || r.data.title)) ||
+						r.status + " " + JSON.stringify(r.data);
+					showHoursResult(String(msg), false);
+					return;
+				}
+				renderWorkedHoursTable(r.data);
+			} catch (e) {
+				hideHoursTable();
+				showHoursResult("Грешка: " + e.message, false);
+			}
+		});
+
+		(async function init() {
+			if (!hoursRequireAuth()) {
+				return;
+			}
+			hoursInitAppHeader("hours");
+			setupHoursSummaryUi();
+			await loadWorkersForHoursSelect();
+		})();
+	</script>
+</body>
+</html>

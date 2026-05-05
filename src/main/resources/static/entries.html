@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="bg">
+<head>
+	<meta charset="UTF-8" />
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<title>Записи — Работни часове</title>
+	<link rel="stylesheet" href="/css/app.css" />
+</head>
+<body>
+	<header class="topnav topnav-app">
+		<h1>Работни часове</h1>
+		<nav class="app-nav">
+			<a href="/record-day.html" data-nav="record">Работен ден</a>
+			<a href="/entries.html" data-nav="entries">Записи</a>
+			<a href="/hours-summary.html" data-nav="hours">Смятане на часове</a>
+			<a href="/admin-workers.html" data-nav="admin" id="navAdminLink" style="display: none">Работници</a>
+			<span class="nav-user">
+				<strong id="whoami"></strong>
+				<span id="whoPhone" class="mono"></span>
+				<button type="button" class="btn btn-danger" id="btnLogout">Изход</button>
+			</span>
+		</nav>
+	</header>
+	<div class="wrap">
+		<div class="card" id="allEntriesCard">
+			<h2>Записани работни дни</h2>
+			<p class="hint" id="entriesHint">Работник: само твоите записи. Админ: всички.</p>
+			<div class="row">
+				<button type="button" class="btn btn-primary" id="btnRefreshList">Обнови списъка</button>
+			</div>
+			<div id="listMsg" class="msg" role="status"></div>
+			<div class="table-wrap" style="margin-top: 0.75rem">
+				<table>
+					<thead>
+						<tr>
+							<th>ID</th>
+							<th>Име</th>
+							<th>Начало</th>
+							<th>Край</th>
+							<th>Превоз</th>
+							<th>Действия</th>
+						</tr>
+					</thead>
+					<tbody id="entriesBody"></tbody>
+				</table>
+			</div>
+		</div>
+	</div>
+	<script src="/js/api-client.js"></script>
+	<script src="/js/app-common.js"></script>
+	<script>
+		function showListMsg(text, ok) {
+			const m = document.getElementById("listMsg");
+			m.textContent = text;
+			m.className = "msg show " + (ok ? "ok" : "err");
+		}
+
+		async function refreshAllEntries() {
+			const tbody = document.getElementById("entriesBody");
+			tbody.innerHTML = "";
+			try {
+				const r = await apiRequest("GET", "/api/work-entries");
+				if (!r.ok) {
+					showListMsg(r.status + " " + JSON.stringify(r.data), false);
+					return;
+				}
+				const list = Array.isArray(r.data) ? r.data : [];
+				if (list.length === 0) {
+					tbody.innerHTML = "<tr><td colspan=\"6\">Няма записи.</td></tr>";
+					showListMsg("0 записа.", true);
+					return;
+				}
+				for (const x of list) {
+					const tr = document.createElement("tr");
+					const emp = hoursEscapeAttr(String(x.employeeName ?? ""));
+					const editHref = "/record-day.html?edit=" + encodeURIComponent(String(x.id));
+					const actions =
+						'<a class="btn btn-edit" href="' +
+						editHref +
+						'">Редактирай</a> ' +
+						'<button type="button" class="btn btn-danger btn-row-del" data-id="' +
+						x.id +
+						'" data-employee-name="' +
+						emp +
+						'">Изтрий</button>';
+					tr.innerHTML =
+						"<td class=\"mono\">" +
+						x.id +
+						"</td><td>" +
+						hoursEscapeHtml(String(x.employeeName ?? "")) +
+						'</td><td class="mono">' +
+						hoursEscapeHtml(String(x.workStart ?? "")) +
+						'</td><td class="mono">' +
+						hoursEscapeHtml(String(x.workEnd ?? "—")) +
+						"</td><td>" +
+						hoursEscapeHtml(String(x.transportType ?? "")) +
+						"</td><td>" +
+						actions +
+						"</td>";
+					tbody.appendChild(tr);
+				}
+				tbody.querySelectorAll(".btn-row-del").forEach((b) => {
+					b.addEventListener("click", () =>
+						deleteEntry(b.getAttribute("data-id"), b.getAttribute("data-employee-name") || "")
+					);
+				});
+				showListMsg("Показани " + list.length + " запис(а).", true);
+			} catch (e) {
+				showListMsg("Грешка: " + e.message, false);
+			}
+		}
+
+		async function deleteEntry(id, employeeLabel) {
+			const label = employeeLabel || "";
+			if (!id || !confirm("Изтрий запис #" + id + (label ? " (" + label + ")" : "") + "?")) {
+				return;
+			}
+			try {
+				const r = await apiRequest("DELETE", "/api/work-entries/" + encodeURIComponent(id));
+				if (!r.ok) {
+					showListMsg(r.status + " " + JSON.stringify(r.data), false);
+					return;
+				}
+				showListMsg("Записът е изтрит.", true);
+				await refreshAllEntries();
+			} catch (e) {
+				showListMsg("Грешка: " + e.message, false);
+			}
+		}
+
+		document.getElementById("btnRefreshList").addEventListener("click", refreshAllEntries);
+
+		(async function init() {
+			if (!hoursRequireAuth()) {
+				return;
+			}
+			hoursInitAppHeader("entries");
+			await refreshAllEntries();
+		})();
+	</script>
+</body>
+</html>
