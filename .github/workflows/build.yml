@@ -19,8 +19,18 @@ jobs:
           java-version: "17"
           distribution: "temurin"
 
+      - name: Set working directory
+        run: cd ${{ github.workspace }}
+
+      - name: Verify mvnw.cmd exists
+        run: |
+          if (-Not (Test-Path "mvnw.cmd")) {
+            Write-Error "mvnw.cmd not found in the working directory."
+            exit 1
+          }
+
       - name: Build project
-        run: mvnw.cmd package
+        run: ./mvnw.cmd package
 
       - name: Upload MSI
         uses: actions/upload-artifact@v4
